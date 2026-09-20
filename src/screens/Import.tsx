@@ -4,18 +4,18 @@ import { fmt } from '../engine/money'
 import { Icon } from '../ui/kit'
 import { CATEGORY_TITLE, type CategoryId } from '../engine/types'
 import { readReceipt, type ReceiptDraft } from '../engine/llm'
+import { pdfToText } from '../engine/pdf'
 
 type Tab = 'pdf' | 'photo'
 
-type Preview = {
-  preview_id: string
-  headers: string[]
-  encoding: string
-  delimiter: string
-  sample: any[]
-  counts: { new: number; duplicate: number; conflict: number; errors: number }
-  errors: { row?: number; message?: string }[]
-  suggested_coverage: { date_from: string | null; date_to: string | null }
+type TextSuggestion = {
+  status: string
+  suggestion: {
+    merchant_normalized: string
+    suggested_category: string | null
+    text_tags: string[]
+    explanation: string
+  } | null
 }
 
 /**
@@ -35,10 +35,11 @@ export default function Import({ onClose }: { onClose: () => void }) {
   const pdfRef = useRef<HTMLInputElement>(null)
   const photoRef = useRef<HTMLInputElement>(null)
 
-  const [preview, setPreview] = useState<Preview | null>(null)
   const [fileName, setFileName] = useState('')
   const [result, setResult] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
+  const [pdfChars, setPdfChars] = useState(0)
+  const [textSuggestions, setTextSuggestions] = useState<TextSuggestion[]>([])
 
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const [draft, setDraft] = useState<ReceiptDraft | null>(null)
@@ -48,25 +49,31 @@ export default function Import({ onClose }: { onClose: () => void }) {
 
   const modelReady = app.llm.enabled && Boolean(app.llm.apiKey)
 
-  const pickPdf = async (file: File) => {
-    setFailure(null); setResult(null); setPreview(null)
-    setFileName(file.name)
-    try {
-      setPreview(await app.previewCsv(file) as Preview)
-    } catch (e) {
-      setFailure(e instanceof Error ? e.message : 'Не удалось прочитать файл')
+  const toSuggestionInput = (text: string) => {
+    const clean = text.replace(/\s+/g, ' ').trim()
+    const chunks: string[] = []
+    for (let i = 0; i < clean.length && chunks.length < 20; i += 200) {
+      chunks.push(clean.slice(i, i + 200))
     }
+    return chunks.filter(Boolean).map(description => ({ description, bank_type: 'unknown' }))
   }
 
-  const commit = async () => {
-    if (!preview) return
+  const pickPdf = async (file: File) => {
+    setFailure(null)
+    setResult(null)
+    setPdfChars(0)
+    setTextSuggestions([])
+    setFileName(file.name)
     try {
-      const res: any = await app.commitCsv(preview.preview_id, preview.counts.errors > 0)
-      setResult('Добавлено ' + res.new + ', дублей пропущено ' + res.duplicate
-        + (preview.counts.errors ? ', строк с ошибками ' + preview.counts.errors : ''))
-      setPreview(null)
+      const text = await pdfToText(file)
+      setPdfChars(text.length)
+      const descriptions = toSuggestionInput(text)
+      if (!descriptions.length) throw new Error('Из PDF не удалось извлечь пригодный текст')
+      const response = await app.askTextSuggestions(descriptions)
+      setTextSuggestions(response.items)
+      setResult('Текст из PDF отправлен в API: ' + response.items.length + ' фрагментов')
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : 'Не удалось импортировать')
+      setFailure(e instanceof Error ? e.message : 'Не удалось прочитать файл')
     }
   }
 
@@ -137,98 +144,68 @@ export default function Import({ onClose }: { onClose: () => void }) {
                 if (f) pickPdf(f)
               }} />
 
-            {!preview && (
-              <button
-                className={'dropzone' + (dragging ? ' over' : '')}
-                disabled={app.busy || app.mode !== 'server'}
-                onClick={() => pdfRef.current?.click()}
-                onDragOver={e => { e.preventDefault(); setDragging(true) }}
-                onDragLeave={() => setDragging(false)}
-                onDrop={e => {
-                  e.preventDefault()
-                  setDragging(false)
-                  const f = e.dataTransfer.files?.[0]
-                  if (f) pickPdf(f)
-                }}>
-                <Icon name="list" size={22} color="var(--accent)" />
-                <span className="dz-title">
-                  {app.busy ? 'Читаю файл…' : dragging ? 'Отпустите файл' : 'Перетащите файл сюда'}
-                </span>
-                <span className="dz-note">
-                  или нажмите, чтобы выбрать · PDF до 10 МБ
-                </span>
-              </button>
-            )}
+            <button
+              className={'dropzone' + (dragging ? ' over' : '')}
+              disabled={app.busy || app.mode !== 'server'}
+              onClick={() => pdfRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setDragging(true) }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={e => {
+                e.preventDefault()
+                setDragging(false)
+                const f = e.dataTransfer.files?.[0]
+                if (f) pickPdf(f)
+              }}>
+              <Icon name="list" size={22} color="var(--accent)" />
+              <span className="dz-title">
+                {app.busy ? 'Читаю PDF и отправляю текст…' : dragging ? 'Отпустите файл' : 'Перетащите PDF сюда'}
+              </span>
+              <span className="dz-note">
+                или нажмите, чтобы выбрать · извлечём текст и отправим в API
+              </span>
+            </button>
 
             {app.mode !== 'server' && (
               <div className="note">
-                Импорт работает только при подключении к серверу: записи выписки, проверка
-                дублей и покрытие периодов хранятся там.
+                Отправка текста работает только при подключении к серверу.
               </div>
             )}
 
-            {preview && (
+            {textSuggestions.length > 0 && (
               <>
                 <div className="card">
                   <div className="label">{fileName}</div>
                   <div className="row" style={{ gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                    <span className="chip on">новых {preview.counts.new}</span>
-                    <span className="chip">дублей {preview.counts.duplicate}</span>
-                    {preview.counts.conflict > 0 && (
-                      <span className="chip warn">конфликтов {preview.counts.conflict}</span>
-                    )}
-                    {preview.counts.errors > 0 && (
-                      <span className="chip warn">ошибок {preview.counts.errors}</span>
-                    )}
-                  </div>
-                  <div className="sub tiny" style={{ marginTop: 10, lineHeight: 1.5 }}>
-                    Кодировка {preview.encoding}, разделитель «{preview.delimiter}».
-                    {preview.suggested_coverage.date_from && (
-                      <> Период {preview.suggested_coverage.date_from} — {preview.suggested_coverage.date_to}.</>
-                    )}
+                    <span className="chip on">символов {pdfChars}</span>
+                    <span className="chip">фрагментов {textSuggestions.length}</span>
+                    <span className="chip">
+                      готовых {textSuggestions.filter(x => x.status === 'ready').length}
+                    </span>
                   </div>
                 </div>
 
                 <div className="card">
-                  <div className="label" style={{ marginBottom: 6 }}>Первые строки</div>
-                  {preview.sample.slice(0, 6).map((r: any, i: number) => (
+                  <div className="label" style={{ marginBottom: 6 }}>Ответ API</div>
+                  {textSuggestions.map((item, i) => (
                     <div className="op" key={i}>
                       <span className="body">
-                        <span className="t">{r.description || '—'}</span>
+                        <span className="t">{item.suggestion?.merchant_normalized || 'без подсказки'}</span>
                         <span className="m">
-                          {r.booking_date} · {r.account_id}
-                          {r.status === 'duplicate' ? ' · дубль' : ''}
-                          {r.status === 'conflict' ? ' · конфликт' : ''}
+                          {item.suggestion?.explanation || 'модель не вернула explanation'}
                         </span>
                       </span>
-                      <span className="v">{fmt(r.amount_minor ?? 0, { kop: false })}</span>
+                      <span className="v">{item.status}</span>
                     </div>
                   ))}
                 </div>
-
-                {preview.counts.errors > 0 && (
-                  <div className="note" style={{ color: 'var(--danger)' }}>
-                    {preview.errors.slice(0, 3).map((e, i) => (
-                      <div key={i}>Строка {e.row ?? '?'}: {e.message ?? 'ошибка разбора'}</div>
-                    ))}
-                    Будут импортированы только корректные строки — частичный импорт не происходит
-                    незаметно.
-                  </div>
-                )}
-
-                <button className="btn" disabled={app.busy || preview.counts.new === 0}
-                  onClick={commit}>
-                  {preview.counts.new === 0
-                    ? 'Новых операций нет'
-                    : 'Импортировать ' + preview.counts.new + ' операций'}
-                </button>
                 <button className="btn ghost sm" style={{ marginTop: 8 }}
-                  onClick={() => { setPreview(null); setFileName('') }}>
-                  Отмена
+                  onClick={() => {
+                    setFileName('')
+                    setPdfChars(0)
+                    setTextSuggestions([])
+                  }}>
+                  Очистить
                 </button>
-                <div className="sub tiny" style={{ marginTop: 10, lineHeight: 1.5 }}>
-                  Пока вы не нажали кнопку, в базе не создано ни одной записи.
-                </div>
               </>
             )}
           </>

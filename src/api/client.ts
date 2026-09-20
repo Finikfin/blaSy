@@ -173,6 +173,29 @@ export type SrvMeta = {
   demo_today: string
 }
 
+export type SrvTextSuggestionRequestItem = {
+  description: string
+  counterparty?: string | null
+  bank_type?: string
+}
+
+export type SrvTextSuggestion = {
+  merchant_normalized: string
+  suggested_category: string | null
+  text_tags: string[]
+  explanation: string
+}
+
+export type SrvTextSuggestionItem = {
+  status: string
+  suggestion: SrvTextSuggestion | null
+}
+
+export type SrvTextSuggestionResponse = {
+  mode: string
+  items: SrvTextSuggestionItem[]
+}
+
 // ── Методы ───────────────────────────────────────────────────────────
 
 export const api = {
@@ -273,4 +296,9 @@ export const api = {
 
   commitImport: (body: Record<string, unknown>) =>
     request<any>('/api/imports/commit', json(body), 30000),
+
+  textSuggestions: (body: {
+    descriptions: SrvTextSuggestionRequestItem[]
+    consent_external?: boolean
+  }) => request<SrvTextSuggestionResponse>('/api/text-suggestions', json(body), 30000),
 }

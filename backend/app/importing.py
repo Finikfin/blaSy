@@ -91,6 +91,10 @@ def parse_money(value):
     return int(minor)
 
 
+def normalize_header(value):
+    return re.sub(r"[^a-zа-яё0-9]+", " ", (value or "").strip().lower()).strip()
+
+
 def mapping_for(headers, mapping):
     if mapping is not None and not isinstance(mapping, dict):
         fail("INVALID_MAPPING", "Сопоставление должно быть объектом")
@@ -98,8 +102,52 @@ def mapping_for(headers, mapping):
         if any(key not in FIELDS or value not in headers for key, value in mapping.items()):
             fail("INVALID_MAPPING", "В сопоставлении есть неизвестная колонка")
         return mapping
-    return {key: next((h for h in headers if h.strip().lower() in aliases), None)
-            for key, aliases in ALIASES.items()}
+    result = {}
+    for key, aliases in ALIASES.items():
+        match = next((h for h in headers if any(alias in normalize_header(h) for alias in aliases)), None)
+        if match is not None:
+            result[key] = match
+    return result
+
+
+def parse_implicit_rows(text, account_id=None, currency=None):
+    rows, errors = [], []
+    for row_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cells = [c.strip() for c in re.split(r"\s*[,;\t|]\s*", stripped) if c.strip()]
+        if len(cells) < 3:
+            continue
+        date_idx = next((i for i, c in enumerate(cells) if re.search(r"\d{4}-\d{2}-\d{2}|\d{2}[.-]\d{2}[.-]\d{4}", c)), None)
+        amount_idx = next((i for i, c in enumerate(cells) if re.search(r"[-+]?\d[\d\s.,]*\d", c)), None)
+        if date_idx is None or amount_idx is None:
+            continue
+        account_idx = next((i for i in range(len(cells)) if i not in {date_idx, amount_idx} and (re.search(r"[A-Za-zА-Яа-я]", cells[i]) or i == 0)), None)
+        currency_idx = next((i for i in range(len(cells)) if i not in {date_idx, amount_idx} and re.fullmatch(r"[A-Z]{3}|[A-Za-z]{3}", cells[i].strip())), None)
+        try:
+            item = {
+                "source_row": row_no,
+                "external_id": None,
+                "account_id": cells[account_idx] if account_idx is not None else (account_id or "main"),
+                "booking_date": parse_date(cells[date_idx]),
+                "amount_minor": parse_money(cells[amount_idx]),
+                "currency": cells[currency_idx] if currency_idx is not None else (currency or "RUB"),
+                "description": " ".join(c for i, c in enumerate(cells) if i not in {date_idx, amount_idx, account_idx, currency_idx} if c)[:500] or "Импорт PDF",
+                "bank_type": "unknown",
+                "counterparty": None,
+                "counterparty_account_ref": None,
+            }
+            if item["currency"].upper() != "RUB":
+                raise ValueError("Поддерживается только RUB")
+            item["description"] = item["description"][:500]
+            fp_fields = [item[k] for k in ("account_id", "booking_date", "amount_minor", "currency", "description", "bank_type")]
+            normalized = [re.sub(r"\s+", " ", x.strip()).casefold() if isinstance(x, str) else x for x in fp_fields]
+            item["fingerprint"] = hashlib.sha256(json.dumps(normalized, ensure_ascii=False).encode()).hexdigest()
+            rows.append(item)
+        except ValueError as exc:
+            errors.append({"row": row_no, "message": str(exc)})
+    return rows, errors
 
 
 def normalize(text, mapping=None, account_id=None, currency=None, delimiter=None, type_mapping=None):
@@ -115,10 +163,16 @@ def normalize(text, mapping=None, account_id=None, currency=None, delimiter=None
     reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=delimiter)
     headers = reader.fieldnames or []
     if not headers:
-        fail("INVALID_CSV", "Нет заголовков CSV")
+        fallback_rows, fallback_errors = parse_implicit_rows(text, account_id, currency)
+        if fallback_rows:
+            return fallback_rows, fallback_errors, {"account_id": "account_id", "booking_date": "booking_date", "amount": "amount", "currency": "currency"}, delimiter, ["account_id", "booking_date", "amount", "currency", "description"]
+        return [], [{"row": 1, "message": "Файл принят, но строки в нём не распознаны. Сначала нужен структурированный PDF/CSV с датой, суммой и валютой."}], {}, delimiter, []
     mapping = mapping_for(headers, mapping)
     if not mapping.get("booking_date") or not (mapping.get("amount") or mapping.get("debit") and mapping.get("credit")) or not (mapping.get("account_id") or account_id) or not (mapping.get("currency") or currency):
-        fail("MISSING_COLUMNS", "Нужны счёт, дата, сумма и валюта; задайте сопоставление или значения по умолчанию")
+        fallback_rows, fallback_errors = parse_implicit_rows(text, account_id, currency)
+        if fallback_rows:
+            return fallback_rows, fallback_errors, {"account_id": "account_id", "booking_date": "booking_date", "amount": "amount", "currency": "currency"}, delimiter, ["account_id", "booking_date", "amount", "currency", "description"]
+        return [], [{"row": 1, "message": "Файл принят, но строки в нём не распознаны. Сначала нужен структурированный PDF/CSV с датой, суммой и валютой."}], mapping, delimiter, headers
     parsed, errors = [], []
     for index, row in enumerate(reader, 2):
         if index > 10001:

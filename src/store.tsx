@@ -385,6 +385,25 @@ function useStore() {
     }
   }, [refresh])
 
+  const askTextSuggestions = useCallback(async (descriptions: {
+    description: string
+    counterparty?: string | null
+    bank_type?: string
+  }[]) => {
+    setBusy(true)
+    try {
+      const result = await api.textSuggestions({ descriptions, consent_external: true })
+      setError(null)
+      return result
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : 'Не удалось отправить текст в API'
+      setError(message)
+      throw new Error(message)
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
   return {
     mode,
     error,
@@ -424,6 +443,7 @@ function useStore() {
     restoreReference,
     previewCsv,
     commitCsv,
+    askTextSuggestions,
     setLlm: (llm: LlmSettings) => patchLocal({ llm }),
   }
 }
