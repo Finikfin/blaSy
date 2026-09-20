@@ -1,0 +1,22 @@
+{
+  "bank_rows": 69,
+  "september": {
+    "expenses_minor": 860000,
+    "income_minor": 2200000,
+    "net_minor": 1340000,
+    "unresolved_incoming_minor": 50000,
+    "unresolved_outgoing_minor": 0,
+    "categories": {
+      "groceries": 570000,
+      "transport": 200000,
+      "electronics": -70000,
+      "restaurants": 160000
+    },
+    "weekly_expenses_minor": [650000,270000,-240000,130000,50000],
+    "weekly_income_minor": [200000,200000,300000,1400000,100000]
+  },
+  "august_expenses_minor": 420000,
+  "cash_balance_minor": 430000,
+  "market_cashflow_minor": 50000,
+  "open_receivables_minor": 0
+}

@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: honest_month
+      POSTGRES_USER: honest_month
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honest_month -d honest_month"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: postgresql://honest_month:${POSTGRES_PASSWORD:-local_dev_password}@db:5432/honest_month
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      TEXT_MODEL_MODE: ${TEXT_MODEL_MODE:-disabled}
+      TEXT_MODEL_URL: ${TEXT_MODEL_URL:-}
+      TEXT_MODEL_NAME: ${TEXT_MODEL_NAME:-}
+      TEXT_MODEL_API_KEY: ${TEXT_MODEL_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  postgres-data:

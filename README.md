@@ -1,1 +1,56 @@
-# blaSy
+# Честный месяц — backend
+
+FastAPI + PostgreSQL API для локального однопользовательского приложения по [ТЗ](TZ.md). Фронтенд разрабатывается отдельно. Все суммы API — целые копейки RUB, даты — `YYYY-MM-DD`. Интерактивная схема доступна на `/docs`, OpenAPI JSON — `/openapi.json`.
+
+## Запуск через Docker Compose
+
+```powershell
+docker compose up -d --build
+```
+
+API: `http://127.0.0.1:8000`; проверка: `http://127.0.0.1:8000/health`. PostgreSQL хранится в именованном volume `postgres-data`. Порт БД наружу не опубликован. `POST /api/demo/load` загружает синтетический набор только по явному запросу и повторно не дублирует его.
+
+Для своего пароля создайте `.env` по образцу `.env.example` и задайте `POSTGRES_PASSWORD`. Compose подставляет пароль в обе службы. Для локального сервера без Docker задайте `DATABASE_URL` на доступный PostgreSQL 16+, установите `backend/requirements.txt`, запустите из каталога `backend`:
+
+```powershell
+python -m pip install -r requirements.lock
+$env:DATABASE_URL = 'postgresql://honest_month:local_dev_password@localhost:5432/honest_month'
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Миграции из `backend/migrations` применяются при старте и учитываются в `schema_migrations`. Для запуска нужен существующий пользователь и БД PostgreSQL. В обычном режиме модель выключена, ключ и внешний сервис не требуются. Опциональный `POST /api/text-suggestions` работает в режимах `disabled`, `mock` и `http` через `TEXT_MODEL_MODE`; для HTTP задайте серверные `TEXT_MODEL_URL` (HTTPS), `TEXT_MODEL_NAME` и `TEXT_MODEL_API_KEY`. Формат внешнего ответа — JSON с `merchant_normalized`, `suggested_category`, `text_tags`, `explanation`. Запрос требует `consent_external=true` и не передаёт суммы или историю долгов. Для фоновых подсказок после импорта пользователь отдельно включает `consent_external` через `PATCH /api/settings/model`; состояние видно в `GET /api/imports/{id}.text_enrichment`. Максимум 20 разных описаний на импорт, один последовательный запрос за раз, таймаут 15 секунд и одна повторная попытка. Ошибка модели не влияет на сохранённые операции и расчёты.
+
+## Контракт для фронтенда
+
+Используйте `/openapi.json` для генерации типов. CORS разрешает `localhost:5173` и `127.0.0.1:5173`; список настраивается `CORS_ORIGINS`. Авторизации нет, поэтому сервер предназначен только для локальной машины. Compose публикует порт API на loopback.
+
+Импорт состоит из двух явных шагов. `GET/POST /api/import-profiles` позволяет сохранить сопоставление колонок и значения по умолчанию по имени профиля; следующий preview с тем же `profile` использует их автоматически.
+
+1. `POST /api/imports/preview` — `multipart/form-data`: `file` (CSV), опционально `profile`, `mapping_json` (например `{"booking_date":"Дата","amount":"Сумма","account_id":"Счёт","currency":"Валюта"}`), `account_id`, `currency=RUB`, `encoding`, `delimiter`, `type_mapping_json`. Ответ содержит `preview_id`, сопоставление, 10 примеров, все нормализованные строки со статусом `new|duplicate|conflict`, ошибки строк и подсказку дат. Финансовые строки пока не записаны.
+2. `POST /api/imports/commit` — JSON `{"preview_id":"...","idempotency_key":"...","import_valid_only":false,"coverage":[{"account_id":"main","date_from":"2026-09-01","date_to":"2026-09-30","asserted_by_user":true}]}`. При ошибках CSV `import_valid_only=true` требуется явно. Можно передать `selected_rows` с номерами строк из preview. Ответ содержит batch и `review_session_id`. Повтор ключа возвращает исходный результат.
+
+После импорта запросите `/api/transactions?page_size=50` и `/api/questions?session_id=...&mode=recommended`. До трёх предложений сессии сохраняются на сервере; полный список доступен с `mode=all`. Вопрос можно отложить. Финансовые действия требуют `expected_revision` из `/api/events/{id}` и уникальный `command_id`; устаревшая ревизия даёт HTTP 409. Ошибки возвращают `detail.code` и `detail.message`.
+
+Для классификации: `POST /api/events/{id}/classify` с `kind=EXPENSE|INCOME|LOAN_ISSUED`, `category` и `participant` при долге. Для совместной покупки: `POST /api/events/{id}/shared` с массивом `{participant,amount_minor,is_self}`; сумма долей обязана равняться покупке. `POST /api/settlements` связывает целое входящее событие с одним `receivable_id`; `POST /api/settlements/group` подтверждает несколько таких связей одной атомарной командой. `POST /api/refunds` связывает возврат с обычной покупкой. Сервер проверяет остаток. `POST /api/decisions/{id}/undo` отменяет последнее совместимое решение; при зависимых погашениях возвращает `DEPENDENT_DECISIONS`. После подтверждения пользователя `?cascade=true` атомарно отменяет также зависимые погашения.
+
+`GET /api/analytics?from=2026-09-01&to=2026-09-30&grouping=week` возвращает расходы, доходы, net, раздельные неопределённые суммы, категории, отрезки, предыдущий период и предупреждения покрытия. Даты включительные. Отрицательные расходы при возврате сохраняются. `/api/accounts` показывает изменение по загруженным операциям и баланс только при явно заданном начальном остатке. `/api/receivables?through=2026-09-30` возвращает остатки на дату. `/api/weekly-review?today=2026-09-30` строит последнюю завершённую неделю, `/api/weekly-review/seen` сохраняет просмотр.
+
+## Демо и проверки
+
+В `backend/fixtures` находятся `demo.csv` (69 банковских строк), две перекрывающиеся части и независимые ожидаемые суммы. Для полного контрольного состояния сначала запустите API, затем:
+
+```powershell
+python backend/scripts/resolve_demo.py
+```
+
+Скрипт явно подтверждает три своих счёта, один долг, разделение ресторана, шесть поступлений, возврат покупки и добавляет одну ручную наличную покупку. S15 остаётся неразобранным. Ожидается сентябрь: расходы 860000, доходы 2200000, net 1340000, неразобранное поступление 50000 копеек. Скрипт можно повторить.
+
+Проверки:
+
+```powershell
+python -m pytest backend/tests -q
+```
+
+Интеграционный тест требует `TEST_DATABASE_URL` с правом создавать временную схему в **одноразовой тестовой БД**. Без переменной он пропускается, тесты парсера продолжают работать. Тест проверяет 69 строк, идемпотентную загрузку, пары переводов, доли, погашения, возврат, деньги по неделям и отмену S15.
+
+Известные границы реализации перечислены в [решениях](docs/DECISIONS.md). Не загружайте реальные выписки в демонстрационную БД.
