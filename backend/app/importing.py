@@ -38,7 +38,8 @@ def extract_text_from_pdf(data: bytes) -> str:
         reader = PdfReader(io.BytesIO(data))
         pages = []
         for page in reader.pages:
-            text = page.extract_text() or ""
+            # Preserve columns and transaction rows in bank statement PDFs.
+            text = page.extract_text(extraction_mode="layout") or page.extract_text() or ""
             if text:
                 pages.append(text)
         text = "\n".join(pages).strip()
@@ -89,6 +90,60 @@ def parse_money(value):
     if minor != minor.to_integral_value() or minor == 0:
         raise ValueError("Сумма должна быть ненулевой с точностью до копейки")
     return int(minor)
+
+
+STATEMENT_ROW = re.compile(
+    r"^\s*(\d{2}\.\d{2}\.\d{2})(?:\s+\d{2}:\d{2})?\s+"
+    r"(\d{2}\.\d{2}\.\d{2})\s+(.+?)\s+"
+    r"([+]?\s*\d[\d ]*[.,]\d{2})\s*₽\s+"
+    r"([+]?\s*\d[\d ]*[.,]\d{2})\s*₽\s*$"
+)
+CARD_HEADER = re.compile(r"Операции по карте\s*№\s*\d+\*+(\d{4})", re.IGNORECASE)
+
+
+def parse_card_statement(text, account_id=None):
+    """Parse the two-date, two-amount card tables in T-Bank statements."""
+    if "Операции по карте" not in text or "Дата" not in text:
+        return None
+    rows, errors = [], []
+    card = None
+    for line_no, line in enumerate(text.splitlines(), 1):
+        header = CARD_HEADER.search(line)
+        if header:
+            card = header.group(1)
+            continue
+        match = STATEMENT_ROW.match(line)
+        if match and card:
+            operation_date, booking_date, description, _, account_amount = match.groups()
+            try:
+                day, month, year = booking_date.split(".")
+                date_value = parse_date(f"{day}.{month}.20{year}")
+                positive = account_amount.lstrip().startswith("+")
+                amount = abs(parse_money(account_amount.replace("₽", ""))) * (1 if positive else -1)
+                description = description.strip()
+                kind = ("refund" if positive and "отмена операции оплаты" in description.casefold()
+                        else "purchase" if not positive and description.casefold().startswith("оплата")
+                        else "transfer" if "перевод" in description.casefold() else "unknown")
+                item = {
+                    "source_row": line_no, "external_id": None,
+                    "account_id": account_id or f"card-{card}",
+                    "booking_date": date_value, "amount_minor": amount, "currency": "RUB",
+                    "description": description[:500], "bank_type": kind,
+                    "counterparty": None, "counterparty_account_ref": None,
+                }
+                rows.append(item)
+            except ValueError as exc:
+                errors.append({"row": line_no, "message": str(exc)})
+        elif rows and card and line.strip() and not re.match(r"^\s*\d{2}\.\d{2}\.\d{2}", line) and not any(
+            word in line for word in ("Операции по карте", "Расходы:", "Дата", "операции", "обработки", "Описание", "валюте счёта")
+        ):
+            # Wrapped merchant or transfer reference belongs to the previous row.
+            rows[-1]["description"] = (rows[-1]["description"] + " " + line.strip())[:500]
+    for item in rows:
+        fields = [item[k] for k in ("account_id", "booking_date", "amount_minor", "currency", "description", "bank_type")]
+        normalized = [re.sub(r"\s+", " ", x.strip()).casefold() if isinstance(x, str) else x for x in fields]
+        item["fingerprint"] = hashlib.sha256(json.dumps(normalized, ensure_ascii=False).encode()).hexdigest()
+    return rows, errors
 
 
 def normalize_header(value):
@@ -153,6 +208,12 @@ def parse_implicit_rows(text, account_id=None, currency=None):
 def normalize(text, mapping=None, account_id=None, currency=None, delimiter=None, type_mapping=None):
     if type_mapping is not None and not isinstance(type_mapping, dict):
         fail("INVALID_MAPPING", "Сопоставление типов должно быть объектом")
+    statement = parse_card_statement(text, account_id)
+    if statement is not None:
+        rows, errors = statement
+        if not rows:
+            errors.append({"row": 1, "message": "Не удалось распознать операции в выписке"})
+        return rows, errors, {}, ",", ["date", "account", "description", "amount"]
     if delimiter is None:
         try:
             delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;").delimiter

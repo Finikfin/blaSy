@@ -61,3 +61,19 @@ def test_pdf_text_is_extracted_and_normalized():
 def test_ambiguous_date_is_rejected():
     with pytest.raises(ValueError):
         parse_date("09/03/2026")
+
+
+def test_card_statement_rows_and_wrapped_descriptions():
+    statement = """Операции по карте № 220070******1234 ИМЯ
+Дата и время    Дата    Описание    Сумма операции    Сумма в валюте счёта
+28.07.26 22:06    29.07.26    Оплата в Магазин    300.00 ₽    300.00 ₽
+29.07.26          29.07.26    Перевод на телефон    1 200.00 ₽    1 200.00 ₽
+                                +79000000000
+30.07.26 12:00    30.07.26    Отмена операции оплаты Магазин    + 300.00 ₽    + 300.00 ₽
+"""
+    rows, errors, *_ = normalize(statement)
+    assert errors == []
+    assert [row["amount_minor"] for row in rows] == [-30000, -120000, 30000]
+    assert [row["bank_type"] for row in rows] == ["purchase", "transfer", "refund"]
+    assert all(row["account_id"] == "card-1234" for row in rows)
+    assert rows[1]["description"].endswith("+79000000000")
