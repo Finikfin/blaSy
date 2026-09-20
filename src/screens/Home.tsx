@@ -31,7 +31,10 @@ const PERIOD_WORD: Record<Granularity, string> = {
   day: 'за день', week: 'за неделю', month: 'за месяц', year: 'за год', custom: 'за период',
 }
 
-export default function Home({ go }: { go: (tab: string) => void }) {
+export default function Home({ go, onImport }: {
+  go: (tab: string) => void
+  onImport: () => void
+}) {
   const app = useApp()
   const [gran, setGran] = useState<Granularity>('month')
   const [range, setRange] = useState(() => rangeFor('month', app.today))
@@ -78,6 +81,11 @@ export default function Home({ go }: { go: (tab: string) => void }) {
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           Разобрать по категориям
           <Icon name="arrow" size={17} color="#0A0A0A" width={2.2} />
+        </button>
+
+        <button className="quietlink" onClick={onImport}>
+          <Icon name="list" size={15} color="var(--dim-2)" />
+          Загрузить выписку
         </button>
 
         {unres.count > 0 && (

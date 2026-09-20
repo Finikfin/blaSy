@@ -8,6 +8,7 @@ import Analytics from './screens/Analytics'
 import More from './screens/More'
 import Add from './screens/Add'
 import Chat from './screens/Chat'
+import Import from './screens/Import'
 
 type Tab = 'home' | 'analytics' | 'operations' | 'more' | 'review'
 
@@ -41,6 +42,7 @@ function Shell() {
   const [tab, setTab] = useState<Tab>('home')
   const [adding, setAdding] = useState(false)
   const [chatting, setChatting] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const go = (t: string) => setTab(t as Tab)
 
@@ -58,11 +60,11 @@ function Shell() {
 
         {app.mode !== 'loading' && (
         <main className="screen" key={tab}>
-          {tab === 'home' && <Home go={go} />}
+          {tab === 'home' && <Home go={go} onImport={() => setImporting(true)} />}
           {tab === 'review' && <Review go={go} />}
           {tab === 'analytics' && <Analytics />}
           {tab === 'operations' && <Operations />}
-          {tab === 'more' && <More />}
+          {tab === 'more' && <More onImport={() => setImporting(true)} />}
         </main>
         )}
 
@@ -112,9 +114,11 @@ function Shell() {
           <Chat
             go={go}
             onClose={() => setChatting(false)}
-            onOpenPad={() => { setChatting(false); setAdding(true) }} />
+            onOpenPad={() => { setChatting(false); setAdding(true) }}
+            onImport={() => { setChatting(false); setImporting(true) }} />
         )}
         {adding && <Add onClose={() => setAdding(false)} />}
+        {importing && <Import onClose={() => setImporting(false)} />}
       </div>
     </div>
   )

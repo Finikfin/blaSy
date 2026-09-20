@@ -1,0 +1,22 @@
+import { chromium } from 'playwright'
+const API = 'http://127.0.0.1:8123'
+const count = async () => (await (await fetch(API + '/api/transactions?page=1&page_size=1')).json()).total
+const browser = await chromium.launch()
+const page = await browser.newPage({ viewport: { width: 1200, height: 950 } })
+await page.addInitScript(() => localStorage.clear())
+await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
+await page.waitForTimeout(2500)
+console.log('событий до:', await count())
+await page.locator('.tab').nth(2).click()
+await page.waitForTimeout(400)
+await page.getByRole('button', { name: 'Загрузить выписку' }).click()
+await page.waitForTimeout(500)
+await page.setInputFiles('input[type=file][accept=".csv,text/csv"]', 'scripts/extra.csv')
+await page.waitForTimeout(3000)
+const chips = await page.locator('.chip').allInnerTexts()
+console.log('повторная загрузка того же файла:', chips.filter(c => /новых|дублей/.test(c)).join(' | '))
+const btn = page.getByRole('button', { name: /Новых операций нет|Импортировать/ })
+console.log('кнопка:', await btn.innerText(), '| активна:', await btn.isEnabled())
+await page.screenshot({ path: 'scripts/shots/f5-import-dedup.png' })
+console.log('событий после:', await count())
+await browser.close()

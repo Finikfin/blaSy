@@ -8,6 +8,8 @@ from collections import Counter
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+from pypdf import PdfReader
+
 from .common import fail, now, uid
 from .db import all_rows, one
 
@@ -29,9 +31,29 @@ ALIASES = {
 KNOWN_TYPES = {"purchase", "salary", "transfer", "refund", "cash_withdrawal", "unknown"}
 
 
+def extract_text_from_pdf(data: bytes) -> str:
+    if not data.startswith(b"%PDF"):
+        fail("INVALID_FILE", "Файл не является PDF")
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        pages = []
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if text:
+                pages.append(text)
+        text = "\n".join(pages).strip()
+        if not text:
+            fail("INVALID_PDF", "PDF не содержит текста для импорта")
+        return text
+    except Exception as exc:  # pragma: no cover - defensive guard for malformed PDF
+        fail("INVALID_PDF", f"Не удалось прочитать PDF: {exc}")
+
+
 def decode_file(data, encoding=None):
     if len(data) > 10 * 1024 * 1024:
         fail("FILE_TOO_LARGE", "Размер файла превышает 10 MB")
+    if data.startswith(b"%PDF"):
+        return extract_text_from_pdf(data), "pdf"
     choices = [encoding] if encoding else ["utf-8-sig", "cp1251"]
     for choice in choices:
         if choice not in ("utf-8", "utf-8-sig", "cp1251"):

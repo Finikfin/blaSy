@@ -411,6 +411,42 @@ h1, h2, h3, p { margin: 0; }
   text-align: left;
 }
 
+/* ── Полноэкранная панель и зона загрузки ───────────────────────── */
+.sheet-full {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.dropzone {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 26px 18px;
+  margin-bottom: 10px;
+  border-radius: var(--radius);
+  background: rgba(204, 255, 0, .05);
+  border: 1px dashed rgba(204, 255, 0, .35);
+  transition: background .15s, border-color .15s;
+}
+.dropzone:hover:not(:disabled) {
+  background: rgba(204, 255, 0, .09);
+  border-color: rgba(204, 255, 0, .55);
+}
+.dropzone.over {
+  background: rgba(204, 255, 0, .14);
+  border-color: var(--accent);
+  border-style: solid;
+}
+.dropzone:disabled { opacity: .45; cursor: default; }
+.dz-title { font-size: 14px; font-weight: 600; }
+.dz-note { font-size: 11px; color: var(--dim-2); text-align: center; line-height: 1.45; }
+
 .divider { height: 1px; background: var(--line); margin: 12px 0; }
 
 /* Тихая строка-переход: минимум веса, вся строка кликабельна */

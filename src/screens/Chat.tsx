@@ -17,10 +17,11 @@ type Msg = {
 
 let seq = 0
 
-export default function Chat({ go, onClose, onOpenPad }: {
+export default function Chat({ go, onClose, onOpenPad, onImport }: {
   go: (tab: string) => void
   onClose: () => void
   onOpenPad: () => void
+  onImport: () => void
 }) {
   const app = useApp()
   const [msgs, setMsgs] = useState<Msg[]>([{
@@ -142,6 +143,7 @@ export default function Chat({ go, onClose, onOpenPad }: {
 
       <div style={{ flex: 'none', padding: '0 18px 18px' }}>
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 10 }}>
+          <button className="chip on" onClick={onImport}>Загрузить выписку</button>
           <button className="chip" onClick={onOpenPad}>Ввести цифрами</button>
           {QUICK_CHIPS.map(c => (
             <button key={c} className="chip" onClick={() => send(c)}>{c}</button>

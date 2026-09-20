@@ -348,22 +348,34 @@ function useStore() {
     setUnlocked(false)
   }, [onServer, patchLocal])
 
-  const importCsv = useCallback(async (file: File) => {
+  /** Шаг 1 импорта: разбор файла без единой финансовой записи (§6.3). */
+  const previewCsv = useCallback(async (file: File) => {
     setBusy(true)
     try {
       const preview = await api.previewImport(file)
+      setError(null)
+      return preview
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : 'Не удалось прочитать файл'
+      setError(message)
+      throw new Error(message)
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  /** Шаг 2 импорта: явное подтверждение пользователем. */
+  const commitCsv = useCallback(async (previewId: string, hasErrors: boolean) => {
+    setBusy(true)
+    try {
       const commit = await api.commitImport({
-        preview_id: preview.preview_id,
+        preview_id: previewId,
         idempotency_key: newCommandId(),
-        import_valid_only: preview.counts.errors > 0,
+        import_valid_only: hasErrors,
       })
       setError(null)
       await refresh()
-      return {
-        new: commit.new as number,
-        duplicate: commit.duplicate as number,
-        errors: preview.counts.errors as number,
-      }
+      return commit
     } catch (e) {
       const message = e instanceof ApiError ? e.message : 'Не удалось импортировать файл'
       setError(message)
@@ -410,7 +422,8 @@ function useStore() {
     markWeeklySeen,
     resetReview,
     restoreReference,
-    importCsv,
+    previewCsv,
+    commitCsv,
     setLlm: (llm: LlmSettings) => patchLocal({ llm }),
   }
 }

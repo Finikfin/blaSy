@@ -4,6 +4,7 @@ import { fmt } from '../engine/money'
 import { Icon } from '../ui/kit'
 import { accountState, expenses, fmtDate, income, monthRange } from '../engine/analytics'
 import { buildDemoTransactions, toCsv } from '../data/demo'
+import { LLM_PRESETS } from '../engine/llm'
 
 const fieldStyle: React.CSSProperties = {
   width: '100%', padding: '10px 12px', borderRadius: 12, marginBottom: 8,
@@ -11,7 +12,7 @@ const fieldStyle: React.CSSProperties = {
   color: 'var(--text)', fontSize: 13, outline: 'none',
 }
 
-export default function More() {
+export default function More({ onImport }: { onImport: () => void }) {
   const app = useApp()
   const [tab, setTab] = useState<'accounts' | 'debts' | 'data'>('accounts')
 
@@ -22,6 +23,7 @@ export default function More() {
   const open = app.receivables.filter(r => r.settledMinor < r.originalMinor)
   const closed = app.receivables.filter(r => r.settledMinor >= r.originalMinor)
   const month = monthRange(app.today)
+  const activePreset = LLM_PRESETS.find(x => x.authScheme === app.llm.authScheme) ?? LLM_PRESETS[0]
   const fileRef = useRef<HTMLInputElement>(null)
   const [imported, setImported] = useState<string | null>(null)
 
@@ -170,33 +172,10 @@ export default function More() {
           {app.mode === 'server' && (
             <div className="card">
               <div className="label" style={{ marginBottom: 10 }}>Импорт выписки</div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".csv,text/csv"
-                style={{ display: 'none' }}
-                onChange={async e => {
-                  const file = e.target.files?.[0]
-                  e.target.value = ''
-                  if (!file) return
-                  try {
-                    const res = await app.importCsv(file)
-                    setImported('Загружено новых: ' + res.new + ', дублей пропущено: '
-                      + res.duplicate + (res.errors ? ', строк с ошибками: ' + res.errors : ''))
-                  } catch (err) {
-                    setImported(null)
-                  }
-                }} />
-              <button className="btn ghost sm" disabled={app.busy}
-                onClick={() => fileRef.current?.click()}>
-                {app.busy ? 'Загружаю…' : 'Выбрать CSV'}
-              </button>
-              {imported && (
-                <div className="note" style={{ marginTop: 10 }}>{imported}</div>
-              )}
+              <button className="btn ghost sm" onClick={onImport}>Загрузить файл</button>
               <div className="sub tiny" style={{ marginTop: 8, lineHeight: 1.5 }}>
-                Поддерживается CSV, до 10 МБ. Повторная загрузка того же файла не создаёт
-                дублей: сервер сверяет записи по идентификатору и отпечатку.
+                CSV до 10 МБ. Сначала предпросмотр с числом новых строк и дублей,
+                запись — только после подтверждения.
               </div>
             </div>
           )}
@@ -277,6 +256,22 @@ export default function More() {
             </div>
             {app.llm.enabled && (
               <div style={{ marginTop: 12 }}>
+                <div className="label" style={{ marginBottom: 6 }}>Провайдер</div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                  {LLM_PRESETS.map(preset => (
+                    <button
+                      key={preset.id}
+                      className={'chip' + (app.llm.authScheme === preset.authScheme ? ' on' : '')}
+                      onClick={() => app.setLlm({
+                        ...app.llm,
+                        baseUrl: preset.baseUrl,
+                        authScheme: preset.authScheme,
+                        model: preset.model,
+                      })}>
+                      {preset.title}
+                    </button>
+                  ))}
+                </div>
                 <input
                   value={app.llm.baseUrl}
                   onChange={e => app.setLlm({ ...app.llm, baseUrl: e.target.value })}
@@ -286,7 +281,7 @@ export default function More() {
                 <input
                   value={app.llm.model}
                   onChange={e => app.setLlm({ ...app.llm, model: e.target.value })}
-                  placeholder="модель"
+                  placeholder={activePreset.modelHint}
                   aria-label="Название модели"
                   style={fieldStyle} />
                 <input
@@ -297,8 +292,12 @@ export default function More() {
                   aria-label="Ключ API"
                   style={fieldStyle} />
                 <div className="note" style={{ marginTop: 4 }}>
-                  Бэкенда у приложения нет, поэтому ключ хранится <b>в этом браузере</b>.
-                  Для демонстрации это допустимо, для продакшена ключ обязан жить на сервере.
+                  Заголовок авторизации: <b>{app.llm.authScheme === 'api-key' ? 'Api-Key' : 'Bearer'}</b>.
+                  {!activePreset.vision && ' Чтение чеков с изображения этот провайдер не поддерживает — вкладка «Чек» предложит ввести сумму вручную.'}
+                </div>
+                <div className="note" style={{ marginTop: 8 }}>
+                  Ключ хранится <b>в этом браузере</b> и на сервер приложения не уходит.
+                  Для продакшена ключ обязан жить на бэкенде — у фронтенда своего хранилища секретов нет.
                 </div>
               </div>
             )}
