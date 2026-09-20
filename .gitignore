@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# локальные env-файлы фронтенда
+.env.local
+.env.*.local
